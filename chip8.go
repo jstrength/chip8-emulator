@@ -2,16 +2,17 @@ package main
 
 import (
     "io/ioutil"
-    "time"
     "math/rand"
-    "os"
     "log"
     "strings"
 
-    term "github.com/nsf/termbox-go"
+    "github.com/veandco/go-sdl2/sdl"
 )
 
 const (
+    pixelSize = 10
+    width = 64*pixelSize
+    height = 32*pixelSize
 )
 
 var (
@@ -53,7 +54,7 @@ var (
         'a':0x7, 's':0x8, 'd':0x9, 'f':0xE,
         'z':0xA, 'x':0x0, 'c':0xB, 'v':0xF,
     }
-    done bool
+    running bool
 )
 
 func loadGame(filename string) {
@@ -75,6 +76,7 @@ func initialize() {
     regI = 0
     sp = 0
     drawFlag = false
+    running = true
 
     gfx = [64 * 32]uint8{}
     stack = [16]uint16{}
@@ -266,85 +268,86 @@ func emulateCycle() {
     }
 }
 
-func drawGraphics() {
-    term.Clear(term.ColorWhite, term.ColorBlack)
+func drawGraphics(window *sdl.Window) {
+	surface, err := window.GetSurface()
+	if err != nil {
+		panic(err)
+	}
+	surface.FillRect(nil, 0)
+
+
     for i, v := range gfx {
-        ch := '0'
+        rect := sdl.Rect{int32((i%64)*pixelSize), int32((i/64)*pixelSize), 10, 10}
         if v == 1 {
-            ch = '1'
+            surface.FillRect(&rect, 0xffff0000)
+        } else {
+            surface.FillRect(&rect, 0x00000000)
         }
-        term.SetCell(i%64, i/64, ch,term.ColorWhite,term.ColorBlack)
     }
-    term.Flush()
+	window.UpdateSurface()
 }
 
 func getKeyPress() uint8 {
     for {
-        ev := term.PollEvent()
-        if ev.Type == term.EventKey {
-            if strings.ContainsRune("1234qwerasdfzxcv", ev.Ch) {
-                return keyboardToKeypad[ev.Ch]
+        for event := sdl.PollEvent(); event != nil; event = sdl.PollEvent() {
+            switch t := event.(type) {
+            case *sdl.KeyboardEvent:
+                if strings.ContainsRune("1234qwerasdfzxcv", rune(t.Keysym.Sym)) && t.State == 0 {
+                    k := keyboardToKeypad[rune(t.Keysym.Sym)]
+                    log.Println("GetKeyPress",k)
+                    return k
+                }
+            case *sdl.QuitEvent:
+                log.Println("Quit")
+                running = false
+                return 0
             }
+            sdl.Delay(17)
         }
     }
 }
 
-func listenKeyboard(pressedKeys chan<- uint8) {
-    for {
-        switch ev := term.PollEvent(); ev.Type {
-        case term.EventKey:
-            if term.KeyCtrlC == ev.Key {
-                done = true
-            } else if strings.ContainsRune("1234qwerasdfzxcv", ev.Ch) {
-                pressedKeys<- keyboardToKeypad[ev.Ch]
+func listenKeyboard() {
+    for event := sdl.PollEvent(); event != nil; event = sdl.PollEvent() {
+        switch t := event.(type) {
+        case *sdl.KeyboardEvent:
+            if strings.ContainsRune("1234qwerasdfzxcv", rune(t.Keysym.Sym)) {
+                k := keyboardToKeypad[rune(t.Keysym.Sym)]
+                key[k] = t.State
+                log.Println("ListenKeyboard",k)
             }
-        case term.EventError:
-            log.Panic(ev.Err)
+        case *sdl.QuitEvent:
+            log.Println("Quit")
+            running = false
         }
-    }
-}
-
-func setKeys(pressedKeys <-chan uint8) {
-    key = [16]uint8{}
-    select {
-    case k := <-pressedKeys:
-        log.Println("Pressed", k)
-        key[k] = 1
-    default:
-        //log.Println("Nothing")
-        //term.Sync()
     }
 }
 
 func main() {
     log.Println("Chip8 Emulator")
 
-    f, err := os.OpenFile("chip8.log", os.O_RDWR | os.O_CREATE | os.O_APPEND, 0666)
-    if err != nil {
-        log.Panicf("error opening file: %v", err)
-    }
-    //log.SetFlags(log.LstdFlags | log.Lshortfile)
-    log.SetOutput(f)
-    defer f.Close()
+    if err := sdl.Init(sdl.INIT_EVERYTHING); err != nil {
+		panic(err)
+	}
+	defer sdl.Quit()
 
-    err = term.Init()
-    if err != nil {
-        panic(err)
-    }
-    defer term.Close()
+    window, err := sdl.CreateWindow("test", sdl.WINDOWPOS_UNDEFINED, sdl.WINDOWPOS_UNDEFINED,
+		width, height, sdl.WINDOW_SHOWN)
+	if err != nil {
+		panic(err)
+	}
+	defer window.Destroy()
 
-    keysPressed := make(chan uint8)
-    go listenKeyboard(keysPressed)
     initialize()
-    loadGame("roms/tetris.rom")
+    loadGame("roms/connect4.rom")
 
-    for !done {
+    for running {
         emulateCycle()
         if drawFlag {
-            drawGraphics()
+            drawGraphics(window)
             drawFlag = false
         }
-        setKeys(keysPressed)
-        time.Sleep(time.Millisecond * 17)
+        listenKeyboard()
+        sdl.Delay(17)
     }
 }

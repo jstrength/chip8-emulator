@@ -6,6 +6,7 @@ import (
     "math/rand"
     "os"
     "log"
+    "strings"
 
     term "github.com/nsf/termbox-go"
 )
@@ -46,6 +47,12 @@ var (
         0xF0, 0x80, 0xF0, 0x80, 0xF0, // E
         0xF0, 0x80, 0xF0, 0x80, 0x80,  // F
     }
+    keyboardToKeypad = map[rune]uint8{
+        '1':0x1, '2':0x2, '3':0x3, '4':0xC,
+        'q':0x4, 'w':0x5, 'e':0x6, 'r':0xD,
+        'a':0x7, 's':0x8, 'd':0x9, 'f':0xE,
+        'z':0xA, 'x':0x0, 'c':0xB, 'v':0xF,
+    }
     done bool
 )
 
@@ -84,7 +91,7 @@ func initialize() {
 }
 
 func emulateCycle() {
-    log.Printf("cycling... %X %X %d %d\n", pc, opcode, delayTimer, soundTimer)
+    //log.Printf("cycling... %X %X %d %d\n", pc, opcode, delayTimer, soundTimer)
     opcode = uint16(memory[pc]) << 8 | uint16(memory[pc + 1])
 
     switch opcode & 0xF000 {
@@ -93,66 +100,82 @@ func emulateCycle() {
         case 0x0000:
             //clear screen
             gfx = [64 * 32]uint8{}
-
         case 0x000E:
             sp--
             pc = stack[sp]
             pc += 2
-
         default:
             log.Panicf("Unknown opcode [0x0000]: 0x%X\n", opcode)
         }
-
     case 0x1000:
         pc = opcode & 0x0FFF
-
     case 0x2000:
         stack[sp] = pc
         sp++
         pc = opcode & 0x0FFF
-
     case 0x3000:
         if regsV[(opcode & 0x0F00) >> 8] == uint8(opcode & 0x00FF) {
             pc += 4
         } else {
             pc += 2
         }
-
+    case 0x4000:
+        if regsV[(opcode & 0x0F00) >> 8] != uint8(opcode & 0x00FF) {
+            pc += 4
+        } else {
+            pc += 2
+        }
     case 0x6000:
         regsV[(opcode & 0x0F00) >> 8] = uint8(opcode & 0x00FF)
         pc += 2
-
     case 0x7000:
         regsV[(opcode & 0x0F00) >> 8] += uint8(opcode & 0x00FF)
         pc += 2
-
     case 0x8000:
         switch opcode & 0x000F {
+        case 0x0000:
+            regsV[(opcode & 0x0F00) >> 8] = regsV[(opcode & 0x00F0) >> 4]
+            pc += 2
+        case 0x0001:
+            regsV[(opcode & 0x0F00) >> 8] |= regsV[(opcode & 0x00F0) >> 4]
+            pc += 2
+        case 0x0002:
+            regsV[(opcode & 0x0F00) >> 8] &= regsV[(opcode & 0x00F0) >> 4]
+            pc += 2
+        case 0x0003:
+            regsV[(opcode & 0x0F00) >> 8] ^= regsV[(opcode & 0x00F0) >> 4]
+            pc += 2
         case 0x0004:
             if regsV[(opcode & 0x00F0) >> 4] > (0xFF - regsV[(opcode & 0x0F00) >> 8]) {
                 regsV[0xF] = 1 //carry
             } else {
                 regsV[0xF] = 0
             }
-            sp += 2
+            pc += 2
         default:
             log.Panicf("Unknown opcode [0x8000]: 0x%X\n", opcode)
         }
-
-
+    case 0x9000:
+        if regsV[(opcode & 0x0F00) >> 8] != regsV[(opcode & 0x00F0) >> 4] {
+            pc += 4
+        } else {
+            pc += 2
+        }
     case 0xA000:
         regI = opcode & 0x0FFF
         pc += 2
-
     case 0xC000:
-        regsV[(opcode & 0x0F00) >> 8] = uint8(rand.Intn(255) & int((opcode & 0x00FF) >> 8))
+        randInt := uint8(rand.Intn(255) & int(opcode & 0x00FF))
+        log.Println("Gen Random",randInt)
+        regsV[(opcode & 0x0F00) >> 8] = randInt
         pc += 2
-
     case 0xD000:
-        var x uint16 = uint16(regsV[(opcode & 0x0F00) >> 8])
-        var y uint16 = uint16(regsV[(opcode & 0x00F0) >> 4])
-        var height uint16 = opcode & 0x000F
-        var pixel uint16
+        var (
+            x uint16 = uint16(regsV[(opcode & 0x0F00) >> 8])
+            y uint16 = uint16(regsV[(opcode & 0x00F0) >> 4])
+            height uint16 = opcode & 0x000F
+            pixel uint16
+        )
 
         regsV[0xF] = 0
         for yLine := uint16(0); yLine < height; yLine++ {
@@ -169,7 +192,6 @@ func emulateCycle() {
 
         drawFlag = true
         pc += 2
-
     case 0xE000:
         switch opcode & 0x00FF {
             // EX9E: Skips the next instruction
@@ -180,22 +202,30 @@ func emulateCycle() {
             } else {
                 pc += 2
             }
-
+        case 0x00A1:
+            if key[regsV[(opcode & 0x0F00) >> 8]] == 0 {
+                pc += 4
+            } else {
+                pc += 2
+            }
         default:
             log.Panicf("Unknown opcode [0xE000]: 0x%X\n", opcode)
         }
-
     case 0xF000:
         switch opcode & 0x00FF {
-        //case 0x000A:
+        case 0x000A:
+            log.Println("Waiting for key input")
+            regsV[(opcode & 0x0F00) >> 8] = getKeyPress()
+            pc += 2
         case 0x0007:
             regsV[(opcode & 0x0F00) >> 8] = delayTimer
             pc += 2
-
         case 0x0015:
             delayTimer = regsV[(opcode & 0x0F00) >> 8]
             pc += 2
-
+        case 0x001E:
+            regI += uint16(regsV[(opcode & 0x0F00) >> 8])
+            pc += 2
         case 0x0029:
             log.Println(regsV[(opcode & 0x0F00) >> 8])
             regI = uint16(regsV[(opcode & 0x0F00) >> 8]) * 0x4
@@ -206,19 +236,16 @@ func emulateCycle() {
             memory[regI + 1] = (regsV[vX] / 10) % 10
             memory[regI + 2] = (regsV[vX] % 100) % 10
             pc += 2
-
         case 0x0055:
             for i := uint16(0); i <= (opcode & 0x0F00) >> 8; i++ {
                 memory[regI + i] = regsV[i]
             }
             pc += 2
-
         case 0x0065:
             for i := uint16(0); i <= (opcode & 0x0F00) >> 8; i++ {
                 regsV[i] = memory[regI + i]
             }
             pc += 2
-
         default:
             log.Panicf("Unknown opcode [0xF000]: 0x%X\n", opcode)
         }
@@ -249,37 +276,40 @@ func drawGraphics() {
         term.SetCell(i%64, i/64, ch,term.ColorWhite,term.ColorBlack)
     }
     term.Flush()
-    log.Println()
 }
 
-func listenKeyboard(pressedKeys chan<- rune) {
+func getKeyPress() uint8 {
     for {
-        switch ev := term.PollEvent(); ev.Type {
-        case term.EventKey:
-            switch ev.Ch {
-            case 'q':
-                done = true
-            default:
-                pressedKeys<- ev.Ch
+        ev := term.PollEvent()
+        if ev.Type == term.EventKey {
+            if strings.ContainsRune("1234qwerasdfzxcv", ev.Ch) {
+                return keyboardToKeypad[ev.Ch]
             }
-        case term.EventError:
-            panic(ev.Err)
         }
     }
 }
 
-func setKeys(pressedKeys <-chan rune) {
+func listenKeyboard(pressedKeys chan<- uint8) {
+    for {
+        switch ev := term.PollEvent(); ev.Type {
+        case term.EventKey:
+            if term.KeyCtrlC == ev.Key {
+                done = true
+            } else if strings.ContainsRune("1234qwerasdfzxcv", ev.Ch) {
+                pressedKeys<- keyboardToKeypad[ev.Ch]
+            }
+        case term.EventError:
+            log.Panic(ev.Err)
+        }
+    }
+}
+
+func setKeys(pressedKeys <-chan uint8) {
     key = [16]uint8{}
     select {
     case k := <-pressedKeys:
-        switch k {
-        case 'x':
-            log.Println("Pressed X")
-            key[0] = 1
-        case '1':
-            log.Println("Pressed 1")
-            key[1] = 1
-        }
+        log.Println("Pressed", k)
+        key[k] = 1
     default:
         //log.Println("Nothing")
         //term.Sync()
@@ -293,6 +323,7 @@ func main() {
     if err != nil {
         log.Panicf("error opening file: %v", err)
     }
+    //log.SetFlags(log.LstdFlags | log.Lshortfile)
     log.SetOutput(f)
     defer f.Close()
 
@@ -302,10 +333,10 @@ func main() {
     }
     defer term.Close()
 
-    keysPressed := make(chan rune)
+    keysPressed := make(chan uint8)
     go listenKeyboard(keysPressed)
     initialize()
-    loadGame("roms/connect4.rom")
+    loadGame("roms/tetris.rom")
 
     for !done {
         emulateCycle()

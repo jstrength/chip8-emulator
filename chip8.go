@@ -4,13 +4,16 @@ package main
 // void SineWave(void *userdata, Uint8 *stream, int len);
 import "C"
 import (
+    "fmt"
     "io/ioutil"
-    "math/rand"
-    "math"
-    "reflect"
-    "unsafe"
     "log"
+    "math"
+    "math/rand"
+    "os"
+    "reflect"
+    "strconv"
     "strings"
+    "unsafe"
 
     "github.com/veandco/go-sdl2/sdl"
 )
@@ -127,10 +130,12 @@ func emulateCycle() {
         switch opcode & 0x000F {
         case 0x0000:
             //clear screen
+            log.Println("Clear screen")
             gfx = [64 * 32]uint8{}
+            drawFlag = true
         case 0x000E:
             sp--
-            pc = stack[sp]
+            pc = stack[sp] //probably shouldn't use external stack
         default:
             log.Panicf("Unknown opcode [0x0000]: 0x%X\n", opcode)
         }
@@ -148,26 +153,47 @@ func emulateCycle() {
         if regsV[(opcode & 0x0F00) >> 8] != uint8(opcode & 0x00FF) {
             pc += 2
         }
+    case 0x5000:
+        if regsV[(opcode & 0x0F00) >> 8] == regsV[(opcode & 0x00F0) >> 4] {
+            pc += 2
+        }
     case 0x6000:
         regsV[(opcode & 0x0F00) >> 8] = uint8(opcode & 0x00FF)
     case 0x7000:
         regsV[(opcode & 0x0F00) >> 8] += uint8(opcode & 0x00FF)
     case 0x8000:
+        vX := (opcode & 0x0F00) >> 8
+        vY := (opcode & 0x00F0) >> 4
         switch opcode & 0x000F {
         case 0x0000:
-            regsV[(opcode & 0x0F00) >> 8] = regsV[(opcode & 0x00F0) >> 4]
+            regsV[vX] = regsV[vY]
         case 0x0001:
-            regsV[(opcode & 0x0F00) >> 8] |= regsV[(opcode & 0x00F0) >> 4]
+            regsV[vX] |= regsV[vY]
         case 0x0002:
-            regsV[(opcode & 0x0F00) >> 8] &= regsV[(opcode & 0x00F0) >> 4]
+            regsV[vX] &= regsV[vY]
         case 0x0003:
-            regsV[(opcode & 0x0F00) >> 8] ^= regsV[(opcode & 0x00F0) >> 4]
+            regsV[vX] ^= regsV[vY]
         case 0x0004:
-            if regsV[(opcode & 0x00F0) >> 4] > (0xFF - regsV[(opcode & 0x0F00) >> 8]) {
+            if regsV[vY] > (0xFF - regsV[vX]) {
                 regsV[0xF] = 1 //carry
             } else {
                 regsV[0xF] = 0
             }
+            regsV[vX] += regsV[vY]
+        case 0x0005:
+            if regsV[vY] > regsV[vX] {
+                regsV[0xF] = 0 //borrow
+                regsV[vX] = (0xFF - (regsV[vY] - regsV[vX]))
+            } else {
+                regsV[0xF] = 1
+                regsV[vX] -= regsV[vY]
+            }
+        case 0x0006:
+            regsV[0xF] = regsV[vX] & 1
+            regsV[vX] >>= 1
+        case 0x000E:
+            regsV[0xF] = regsV[vX] & 8
+            regsV[vX] <<= 1
         default:
             log.Panicf("Unknown opcode [0x8000]: 0x%X\n", opcode)
         }
@@ -178,8 +204,7 @@ func emulateCycle() {
     case 0xA000:
         regI = opcode & 0x0FFF
     case 0xC000:
-        randInt := uint8(rand.Intn(255) & int(opcode & 0x00FF))
-        log.Println("Gen Random",randInt)
+        randInt := uint8(rand.Intn(256) & int(opcode & 0x00FF))
         regsV[(opcode & 0x0F00) >> 8] = randInt
     case 0xD000:
         var (
@@ -220,31 +245,31 @@ func emulateCycle() {
             log.Panicf("Unknown opcode [0xE000]: 0x%X\n", opcode)
         }
     case 0xF000:
+        vX := (opcode & 0x0F00) >> 8
         switch opcode & 0x00FF {
         case 0x000A:
             log.Println("Waiting for key input")
-            regsV[(opcode & 0x0F00) >> 8] = getKeyPress()
+            regsV[vX] = getKeyPress()
         case 0x0007:
-            regsV[(opcode & 0x0F00) >> 8] = delayTimer
+            regsV[vX] = delayTimer
         case 0x0015:
-            delayTimer = regsV[(opcode & 0x0F00) >> 8]
+            delayTimer = regsV[vX]
         case 0x0018:
-            soundTimer = regsV[(opcode & 0x0F00) >> 8]
+            soundTimer = regsV[vX]
         case 0x001E:
-            regI += uint16(regsV[(opcode & 0x0F00) >> 8])
+            regI += uint16(regsV[vX])
         case 0x0029:
-            regI = uint16(((opcode & 0x0F00) >> 8) * 5)
+            regI = uint16(regsV[vX] * 5)
         case 0x0033:
-            vX := (opcode & 0x0F00) >> 8
             memory[regI] = regsV[vX] / 100
             memory[regI + 1] = (regsV[vX] / 10) % 10
             memory[regI + 2] = (regsV[vX] % 100) % 10
         case 0x0055:
-            for i := uint16(0); i <= (opcode & 0x0F00) >> 8; i++ {
+            for i := uint16(0); i <= vX; i++ {
                 memory[regI + i] = regsV[i]
             }
         case 0x0065:
-            for i := uint16(0); i <= (opcode & 0x0F00) >> 8; i++ {
+            for i := uint16(0); i <= vX; i++ {
                 regsV[i] = memory[regI + i]
             }
         default:
@@ -275,7 +300,6 @@ func drawGraphics(window *sdl.Window) {
 	}
 	surface.FillRect(nil, 0)
 
-
     for i, v := range gfx {
         rect := sdl.Rect{int32((i%64)*pixelSize), int32((i/64)*pixelSize), 10, 10}
         if v == 1 {
@@ -288,35 +312,27 @@ func drawGraphics(window *sdl.Window) {
 }
 
 func getKeyPress() uint8 {
-    for {
-        for event := sdl.PollEvent(); event != nil; event = sdl.PollEvent() {
-            switch t := event.(type) {
-            case *sdl.KeyboardEvent:
-                if strings.ContainsRune("1234qwerasdfzxcv", rune(t.Keysym.Sym)) && t.State == 0 {
-                    k := keyboardToKeypad[rune(t.Keysym.Sym)]
-                    log.Println("GetKeyPress",k)
-                    return k
-                }
-            case *sdl.QuitEvent:
-                log.Println("Quit")
-                running = false
-                return 0
+    for event := sdl.WaitEvent(); event != nil; event = sdl.WaitEvent() {
+        switch t := event.(type) {
+        case *sdl.KeyboardEvent:
+            if strings.ContainsRune("1234qwerasdfzxcv", rune(t.Keysym.Sym)) && t.State == 0 {
+                return keyboardToKeypad[rune(t.Keysym.Sym)]
             }
+        case *sdl.QuitEvent:
+            log.Println("Quit")
+            running = false
+            return 0xFF
         }
-        sdl.Delay(17)
     }
+    return 0xFF
 }
 
 func listenKeyboard() {
-    for event := sdl.PollEvent(); event != nil; event = sdl.PollEvent() {
+    if event := sdl.PollEvent(); event != nil {
         switch t := event.(type) {
         case *sdl.KeyboardEvent:
             if strings.ContainsRune("1234qwerasdfzxcv", rune(t.Keysym.Sym)) {
-                k := keyboardToKeypad[rune(t.Keysym.Sym)]
-                if key[k] != t.State {
-                    key[k] = t.State
-                    log.Println("ListenKeyboard",k, t.State)
-                }
+                key[keyboardToKeypad[rune(t.Keysym.Sym)]] = t.State
             }
         case *sdl.QuitEvent:
             log.Println("Quit")
@@ -326,6 +342,25 @@ func listenKeyboard() {
 }
 
 func main() {
+    var (
+        romPath string
+        delayMs int
+    )
+    if len(os.Args[1:]) == 2 {
+        romPath = os.Args[1]
+        var err error
+        delayMs, err = strconv.Atoi(os.Args[2])
+        if err != nil {
+            log.Panicln(err)
+        }
+    } else if len(os.Args[1:]) == 1 {
+        romPath = os.Args[1]
+        delayMs = 16
+    } else {
+        fmt.Println("Arguments: <rom-path> [delay-ms]")
+        return
+    }
+
     log.Println("Chip8 Emulator")
 
     if err := sdl.Init(sdl.INIT_EVERYTHING); err != nil {
@@ -341,7 +376,7 @@ func main() {
 	defer window.Destroy()
 
     initialize()
-    loadGame("roms/pong.rom")
+    loadGame(romPath)
 
     spec := &sdl.AudioSpec{
 		Freq:     sampleHz,
@@ -363,6 +398,6 @@ func main() {
             drawFlag = false
         }
         listenKeyboard()
-        sdl.Delay(17)
+        sdl.Delay(uint32(delayMs))
     }
 }

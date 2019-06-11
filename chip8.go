@@ -11,7 +11,6 @@ import (
     "math/rand"
     "os"
     "reflect"
-    "strconv"
     "strings"
     "unsafe"
 
@@ -86,7 +85,6 @@ var (
 )
 
 func loadGame(filename string) {
-    log.Println("Loading", filename)
     buffer, err := ioutil.ReadFile(filename)
     if err != nil {
         log.Println("Unable to load", filename)
@@ -96,6 +94,7 @@ func loadGame(filename string) {
     for i, b := range buffer {
         memory[i + 512] = b
     }
+    log.Println("Loaded", filename)
 }
 
 func initialize() {
@@ -120,6 +119,20 @@ func initialize() {
     soundTimer = 0
 }
 
+func decrementTimers() {
+    if delayTimer > 0 {
+        delayTimer--
+    }
+
+    if soundTimer > 0 {
+        sdl.PauseAudio(false)
+        if soundTimer == 1 {
+            sdl.PauseAudio(true)
+        }
+        soundTimer--
+    }
+}
+
 func emulateCycle() {
     //log.Printf("cycling... %X %X %d %d\n", pc, opcode, delayTimer, soundTimer)
     opcode = uint16(memory[pc]) << 8 | uint16(memory[pc + 1])
@@ -130,7 +143,6 @@ func emulateCycle() {
         switch opcode & 0x000F {
         case 0x0000:
             //clear screen
-            log.Println("Clear screen")
             gfx = [64 * 32]uint8{}
             drawFlag = true
         case 0x000E:
@@ -279,18 +291,6 @@ func emulateCycle() {
     default:
         log.Panicf("Unknown opcode: 0x%X\n", opcode)
     }
-
-    if delayTimer > 0 {
-        delayTimer--
-    }
-
-    if soundTimer > 0 {
-        sdl.PauseAudio(false)
-        if soundTimer == 1 {
-            sdl.PauseAudio(true)
-        }
-        soundTimer--
-    }
 }
 
 func drawGraphics(window *sdl.Window) {
@@ -342,33 +342,20 @@ func listenKeyboard() {
 }
 
 func main() {
-    var (
-        romPath string
-        delayMs int
-    )
-    if len(os.Args[1:]) == 2 {
+    var romPath string
+    if len(os.Args) == 2 {
         romPath = os.Args[1]
-        var err error
-        delayMs, err = strconv.Atoi(os.Args[2])
-        if err != nil {
-            log.Panicln(err)
-        }
-    } else if len(os.Args[1:]) == 1 {
-        romPath = os.Args[1]
-        delayMs = 16
     } else {
-        fmt.Println("Arguments: <rom-path> [delay-ms]")
+        fmt.Println("Arguments: <rom-path>")
         return
     }
-
-    log.Println("Chip8 Emulator")
 
     if err := sdl.Init(sdl.INIT_EVERYTHING); err != nil {
 		panic(err)
 	}
 	defer sdl.Quit()
 
-    window, err := sdl.CreateWindow("test", sdl.WINDOWPOS_UNDEFINED, sdl.WINDOWPOS_UNDEFINED,
+    window, err := sdl.CreateWindow("Chip8 Emulator - " + romPath, sdl.WINDOWPOS_UNDEFINED, sdl.WINDOWPOS_UNDEFINED,
 		width, height, sdl.WINDOW_SHOWN)
 	if err != nil {
 		panic(err)
@@ -392,12 +379,15 @@ func main() {
 	defer sdl.CloseAudio()
 
     for running {
-        emulateCycle()
+        for i := 0; i < 8; i++ {
+            emulateCycle()
+        }
         if drawFlag {
             drawGraphics(window)
             drawFlag = false
         }
+        decrementTimers()
         listenKeyboard()
-        sdl.Delay(uint32(delayMs))
+        sdl.Delay(16)
     }
 }

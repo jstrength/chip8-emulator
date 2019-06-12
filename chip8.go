@@ -27,21 +27,6 @@ const (
 	dPhase   = 2 * math.Pi * toneHz / sampleHz
 )
 
-//export SineWave
-func SineWave(userdata unsafe.Pointer, stream *C.Uint8, length C.int) {
-	n := int(length)
-	hdr := reflect.SliceHeader{Data: uintptr(unsafe.Pointer(stream)), Len: n, Cap: n}
-	buf := *(*[]C.Uint8)(unsafe.Pointer(&hdr))
-
-	var phase float64
-	for i := 0; i < n; i += 2 {
-		phase += dPhase
-		sample := C.Uint8((math.Sin(phase) + 0.999999) * 16)
-		buf[i] = sample
-		buf[i+1] = sample
-	}
-}
-
 var (
     opcode uint16
     memory [4096]uint8
@@ -352,7 +337,22 @@ func listenKeyboard() {
     }
 }
 
-func initializeSDL(title string) func() {
+//export SineWave
+func SineWave(userdata unsafe.Pointer, stream *C.Uint8, length C.int) {
+	n := int(length)
+	hdr := reflect.SliceHeader{Data: uintptr(unsafe.Pointer(stream)), Len: n, Cap: n}
+	buf := *(*[]C.Uint8)(unsafe.Pointer(&hdr))
+
+	var phase float64
+	for i := 0; i < n; i += 2 {
+		phase += dPhase
+		sample := C.Uint8((math.Sin(phase) + 0.999999) * 16)
+		buf[i] = sample
+		buf[i+1] = sample
+	}
+}
+
+func initializeSDL(title string) {
     if err := sdl.Init(sdl.INIT_EVERYTHING); err != nil {
 		panic(err)
 	}
@@ -375,12 +375,13 @@ func initializeSDL(title string) func() {
 		log.Println(err)
 		panic(err)
 	}
+}
 
-    return func() {
-        defer sdl.Quit()
-        defer window.Destroy()
-        defer sdl.CloseAudio()
-    }
+func destroySDL() {
+    sdl.CloseAudio()
+    window.Destroy()
+    sdl.Quit()
+    log.Println("Destroyed SDL")
 }
 
 func main() {
@@ -392,7 +393,8 @@ func main() {
         return
     }
 
-    defer initializeSDL("Chip8 Emulator - " + romPath)()
+    initializeSDL("Chip8 Emulator - " + romPath)
+    defer destroySDL()
     initialize()
     loadGame(romPath)
 

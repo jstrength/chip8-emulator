@@ -18,11 +18,11 @@ import (
 )
 
 const (
-    pixelSize = 10
+    pixelSize = 15
     width = 64*pixelSize
     height = 32*pixelSize
 
-    toneHz   = 440
+    toneHz   = 220
 	sampleHz = 48000
 	dPhase   = 2 * math.Pi * toneHz / sampleHz
 )
@@ -36,7 +36,7 @@ func SineWave(userdata unsafe.Pointer, stream *C.Uint8, length C.int) {
 	var phase float64
 	for i := 0; i < n; i += 2 {
 		phase += dPhase
-		sample := C.Uint8((math.Sin(phase) + 0.999999) * 128)
+		sample := C.Uint8((math.Sin(phase) + 0.999999) * 16)
 		buf[i] = sample
 		buf[i+1] = sample
 	}
@@ -82,6 +82,7 @@ var (
         'z':0xA, 'x':0x0, 'c':0xB, 'v':0xF,
     }
     running bool
+    window *sdl.Window
 )
 
 func loadGame(filename string) {
@@ -134,8 +135,8 @@ func decrementTimers() {
 }
 
 func emulateCycle() {
-    //log.Printf("cycling... %X %X %d %d\n", pc, opcode, delayTimer, soundTimer)
     opcode = uint16(memory[pc]) << 8 | uint16(memory[pc + 1])
+    //log.Printf("cycling... %X %X %d %d\n", pc, opcode, delayTimer, soundTimer)
     pc += 2
 
     switch opcode & 0xF000 {
@@ -203,6 +204,14 @@ func emulateCycle() {
         case 0x0006:
             regsV[0xF] = regsV[vX] & 1
             regsV[vX] >>= 1
+        case 0x0007:
+            if regsV[vY] < regsV[vX] {
+                regsV[0xF] = 0 //borrow
+                regsV[vX] = (0xFF - (regsV[vX] - regsV[vY]))
+            } else {
+                regsV[0xF] = 1
+                regsV[vX] = regsV[vY] - regsV[vX]
+            }
         case 0x000E:
             regsV[0xF] = regsV[vX] & 8
             regsV[vX] <<= 1
@@ -293,7 +302,7 @@ func emulateCycle() {
     }
 }
 
-func drawGraphics(window *sdl.Window) {
+func drawGraphics() {
 	surface, err := window.GetSurface()
 	if err != nil {
 		panic(err)
@@ -301,7 +310,7 @@ func drawGraphics(window *sdl.Window) {
 	surface.FillRect(nil, 0)
 
     for i, v := range gfx {
-        rect := sdl.Rect{int32((i%64)*pixelSize), int32((i/64)*pixelSize), 10, 10}
+        rect := sdl.Rect{int32((i%64)*pixelSize), int32((i/64)*pixelSize), pixelSize, pixelSize}
         if v == 1 {
             surface.FillRect(&rect, 0xffff0000)
         } else {
@@ -312,6 +321,8 @@ func drawGraphics(window *sdl.Window) {
 }
 
 func getKeyPress() uint8 {
+    drawGraphics() //in case there is anything left to display while we wait
+    key = [16]uint8{}
     for event := sdl.WaitEvent(); event != nil; event = sdl.WaitEvent() {
         switch t := event.(type) {
         case *sdl.KeyboardEvent:
@@ -328,7 +339,7 @@ func getKeyPress() uint8 {
 }
 
 func listenKeyboard() {
-    if event := sdl.PollEvent(); event != nil {
+    for event := sdl.PollEvent(); event != nil; event = sdl.PollEvent() {
         switch t := event.(type) {
         case *sdl.KeyboardEvent:
             if strings.ContainsRune("1234qwerasdfzxcv", rune(t.Keysym.Sym)) {
@@ -341,29 +352,17 @@ func listenKeyboard() {
     }
 }
 
-func main() {
-    var romPath string
-    if len(os.Args) == 2 {
-        romPath = os.Args[1]
-    } else {
-        fmt.Println("Arguments: <rom-path>")
-        return
-    }
-
+func initializeSDL(title string) func() {
     if err := sdl.Init(sdl.INIT_EVERYTHING); err != nil {
 		panic(err)
 	}
-	defer sdl.Quit()
 
-    window, err := sdl.CreateWindow("Chip8 Emulator - " + romPath, sdl.WINDOWPOS_UNDEFINED, sdl.WINDOWPOS_UNDEFINED,
+    var err error
+    window, err = sdl.CreateWindow(title, sdl.WINDOWPOS_UNDEFINED, sdl.WINDOWPOS_UNDEFINED,
 		width, height, sdl.WINDOW_SHOWN)
 	if err != nil {
 		panic(err)
 	}
-	defer window.Destroy()
-
-    initialize()
-    loadGame(romPath)
 
     spec := &sdl.AudioSpec{
 		Freq:     sampleHz,
@@ -374,20 +373,39 @@ func main() {
 	}
 	if err := sdl.OpenAudio(spec, nil); err != nil {
 		log.Println(err)
-		return
+		panic(err)
 	}
-	defer sdl.CloseAudio()
+
+    return func() {
+        defer sdl.Quit()
+        defer window.Destroy()
+        defer sdl.CloseAudio()
+    }
+}
+
+func main() {
+    var romPath string
+    if len(os.Args) == 2 {
+        romPath = os.Args[1]
+    } else {
+        fmt.Println("Arguments: <rom-path>")
+        return
+    }
+
+    defer initializeSDL("Chip8 Emulator - " + romPath)()
+    initialize()
+    loadGame(romPath)
 
     for running {
         for i := 0; i < 8; i++ {
+            listenKeyboard()
             emulateCycle()
-        }
-        if drawFlag {
-            drawGraphics(window)
-            drawFlag = false
+            if drawFlag {
+                drawGraphics()
+                drawFlag = false
+            }
         }
         decrementTimers()
-        listenKeyboard()
         sdl.Delay(16)
     }
 }
